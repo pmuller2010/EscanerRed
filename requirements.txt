@@ -1,0 +1,7 @@
+# Escáner de Red - dependencias
+#
+# La aplicación en sí usa SOLO la librería estándar de Python (tkinter, sqlite3,
+# ctypes, socket...), así que para ejecutarla no hace falta instalar nada.
+#
+# Lo único externo es PyInstaller, que se necesita para generar el .exe.
+pyinstaller>=6.22
