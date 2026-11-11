@@ -18,6 +18,7 @@ Está hecha en Python con Tkinter y usa solo la librería estándar.
   El máximo por escaneo es de 65.536 direcciones.
 - De cada dispositivo muestra:
   - **Estado**: `Autorizado`, `SIN AUTORIZAR` (fila en rojo) o `Este equipo`
+  - **Descripción**: la que se le puso al autorizarlo
   - **IP**
   - **Nombre**
   - **MAC** (solo para equipos de la misma red local)
@@ -54,8 +55,9 @@ internet).
 #### Detectar equipos que no son de la empresa
 
 1. Hacer un escaneo y revisar la lista con el detalle de cada equipo.
-2. Clic derecho en cada equipo conocido → **Marcar como autorizado...**, con una
-   descripción ("Notebook de Juan", "Impresora de recepción"). Si ya se revisó
+2. Clic derecho en cada equipo conocido → **Autorizar / editar descripción...**,
+   con una descripción ("Notebook de Juan", "Impresora de recepción"). La misma
+   opción sirve para cambiarla después. Si ya se revisó
    toda la lista, **Autorizar todos los de la lista...** lo hace de una vez.
 3. En los escaneos siguientes, todo lo que aparezca en rojo como
    `SIN AUTORIZAR` es un equipo nuevo. La barra de estado dice cuántos hay, y

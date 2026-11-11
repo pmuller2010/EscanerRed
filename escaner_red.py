@@ -478,15 +478,15 @@ def clave_ip(ip):
 
 
 class App(tk.Tk):
-    COLUMNAS = (("estado", "Estado", 105), ("ip", "IP", 105), ("nombre", "Nombre", 170),
-                ("mac", "MAC", 130), ("fabricante", "Fabricante", 190),
-                ("sistema", "Tipo / sistema (estimado)", 230), ("latencia", "Latencia", 95),
-                ("puertos", "Puertos abiertos", 300))
+    COLUMNAS = (("estado", "Estado", 105), ("descripcion", "Descripción", 180),
+                ("ip", "IP", 105), ("nombre", "Nombre", 160), ("mac", "MAC", 130),
+                ("fabricante", "Fabricante", 180), ("sistema", "Tipo / sistema (estimado)", 220),
+                ("latencia", "Latencia", 90), ("puertos", "Puertos abiertos", 260))
 
     def __init__(self):
         super().__init__()
         self.title(APP_TITULO)
-        self.geometry("1400x720")
+        self.geometry("1500x720")
         try:
             self.iconbitmap(default=ruta_recurso("icono.ico"))      # ventana y barra de tareas
         except tk.TclError:
@@ -575,7 +575,7 @@ class App(tk.Tk):
         self.tabla.bind("<Button-3>", self._menu_contextual)
         self.menu = tk.Menu(self, tearoff=0)
         self.menu.add_command(label="Ver detalle", command=self.ver_detalle)
-        self.menu.add_command(label="Marcar como autorizado...", command=self.autorizar)
+        self.menu.add_command(label="Autorizar / editar descripción...", command=self.autorizar)
         self.menu.add_command(label="Quitar autorización", command=self.desautorizar)
         self.menu.add_command(label="Autorizar todos los de la lista...",
                               command=self.autorizar_todos)
@@ -605,7 +605,8 @@ class App(tk.Tk):
             puertos = texto_puertos(d["puertos"])
         else:
             puertos = "analizando..."
-        return (self._estado(d), d["ip"], d["nombre"], d["mac"],
+        return (self._estado(d), self.autorizados.get(clave_disp(d), ""), d["ip"], d["nombre"],
+                d["mac"],
                 (d.get("info") or {}).get("fabricante", ""), tipo_dispositivo(d), lat, puertos)
 
     def _estado(self, d):
