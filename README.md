@@ -164,7 +164,7 @@ pasos.
 Con el entorno virtual activo:
 
 ```powershell
-pyinstaller --noconfirm --onefile --windowed --name EscanerRed --add-data "fabricantes.txt;." escaner_red.py
+pyinstaller --noconfirm --onefile --windowed --name EscanerRed --icon icono.ico --add-data "icono.ico;." --add-data "fabricantes.txt;." escaner_red.py
 ```
 
 El resultado queda en `dist\EscanerRed.exe`. Es un único archivo que se puede
@@ -208,6 +208,8 @@ La base tiene dos tablas:
 |---|---|
 | `escaner_red.py` | La aplicación: interfaz, escaneo, base de datos |
 | `identificar.py` | Identificación de equipos: NetBIOS, mDNS, LLMNR, SMB, web, UPnP, fabricantes |
+| `icono.ico` | Icono de la ventana y del `.exe` |
+| `crear_icono.py` | Genera `icono.ico`; solo hace falta si se quiere cambiar el dibujo |
 | `fabricantes.txt` | Base de fabricantes del IEEE (prefijo de MAC y nombre) |
 | `EscanerRed.bat` | Acceso directo para abrirla sin consola |
 | `requirements.txt` | Librerías a instalar en el entorno virtual |

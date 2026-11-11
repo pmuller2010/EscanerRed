@@ -60,6 +60,14 @@ def carpeta_app():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def ruta_recurso(nombre):
+    """Archivo que acompaña a la app: junto al programa o dentro del .exe."""
+    for carpeta in (carpeta_app(), getattr(sys, "_MEIPASS", "")):
+        if carpeta and os.path.exists(os.path.join(carpeta, nombre)):
+            return os.path.join(carpeta, nombre)
+    return ""
+
+
 DB_PATH = os.environ.get("ESCANER_DB") or os.path.join(carpeta_app(), "escaneos.db")
 
 # --------------------------------------------------------------------------
@@ -479,6 +487,10 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITULO)
         self.geometry("1400x720")
+        try:
+            self.iconbitmap(default=ruta_recurso("icono.ico"))      # ventana y barra de tareas
+        except tk.TclError:
+            pass
         self.minsize(900, 500)
         self.db = BaseDatos(DB_PATH)
         self.q = queue.Queue()
