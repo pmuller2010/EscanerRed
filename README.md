@@ -1,8 +1,10 @@
 # Escáner de Red
 
 Aplicación de escritorio para Windows que busca los dispositivos conectados a la
-red, muestra sus datos (IP, nombre, MAC, puertos abiertos), guarda los escaneos
-para consultarlos o compararlos después, e incluye una herramienta de ping.
+red, averigua todo lo posible para identificarlos (nombre, MAC, fabricante,
+sistema, puertos y servicios), marca los que no están autorizados, guarda los
+escaneos para consultarlos o compararlos después, e incluye una herramienta de
+ping.
 
 Está hecha en Python con Tkinter y usa solo la librería estándar.
 
@@ -15,21 +17,61 @@ Está hecha en Python con Tkinter y usa solo la librería estándar.
   `192.168.1.1-192.168.1.50`), una IP suelta o un nombre de equipo.
   El máximo por escaneo es de 65.536 direcciones.
 - De cada dispositivo muestra:
+  - **Estado**: `Autorizado`, `SIN AUTORIZAR` (fila en rojo) o `Este equipo`
   - **IP**
-  - **Nombre** (resolución inversa de DNS / NetBIOS)
+  - **Nombre**
   - **MAC** (solo para equipos de la misma red local)
+  - **Fabricante** de la placa de red, según la MAC
+  - **Tipo / sistema (estimado)**
   - **Latencia** del ping
-  - **Sistema (estimado)**, deducido del TTL de la respuesta; es orientativo
   - **Puertos abiertos**, con el nombre del servicio cuando es conocido
 - Encuentra también equipos que no responden al ping, porque además consulta
   por ARP. Esos aparecen como "sin resp. a ping".
+- Doble clic en un equipo abre el **detalle** con todo lo que se averiguó.
+
+#### Cómo se identifica cada equipo
+
+Los nombres no dependen solo de la resolución de Windows (que falla seguido):
+se le pregunta directamente a cada equipo por varios protocolos.
+
+| Dato | De dónde sale |
+|---|---|
+| Nombre | NetBIOS (UDP 137), mDNS/Bonjour (UDP 5353), DNS inverso, LLMNR (UDP 5355), SMB y UPnP |
+| Grupo de trabajo / dominio | NetBIOS y SMB |
+| Versión de Windows | SMB (puerto 445), sin iniciar sesión. Da la compilación exacta |
+| Fabricante | Los primeros 6 dígitos de la MAC, con la base oficial del IEEE (`fabricantes.txt`) |
+| Página web del equipo | Título y servidor en los puertos 80, 8080, 8000, 443 y 8443 |
+| Servicios | Primera línea que mandan SSH, FTP y SMTP (versión del software) |
+| Modelo | UPnP/SSDP: routers, televisores, impresoras, cámaras, NAS |
+
+Si la MAC es **privada/aleatoria** se indica en la columna Fabricante. Esas MAC
+las inventa el propio equipo (celulares, tablets y notebooks con "dirección
+Wi-Fi privada"), así que suelen ser dispositivos personales.
+
+El botón **Actualizar fabricantes** baja la última base del IEEE (necesita
+internet).
+
+#### Detectar equipos que no son de la empresa
+
+1. Hacer un escaneo y revisar la lista con el detalle de cada equipo.
+2. Clic derecho en cada equipo conocido → **Marcar como autorizado...**, con una
+   descripción ("Notebook de Juan", "Impresora de recepción"). Si ya se revisó
+   toda la lista, **Autorizar todos los de la lista...** lo hace de una vez.
+3. En los escaneos siguientes, todo lo que aparezca en rojo como
+   `SIN AUTORIZAR` es un equipo nuevo. La barra de estado dice cuántos hay, y
+   ordenando por la columna Estado quedan juntos.
+
+Los autorizados se reconocen por la MAC (o por la IP si no se conoce la MAC) y
+se guardan en la base, así que valen para todos los escaneos. Un equipo con MAC
+privada puede volver a figurar sin autorizar si cambia su MAC.
+
 - La lista de puertos es editable: `22,80,443,8000-8100`. Si se deja vacía no se
   escanean puertos.
 - "Espera (ms)" es el tiempo máximo que se espera cada respuesta (ping y
   puertos). En redes lentas o por VPN conviene subirlo.
 - Clic en el encabezado de una columna para ordenar.
-- Doble clic en un equipo: le hace ping. Clic derecho: copiar IP, copiar MAC,
-  abrir en el navegador.
+- Clic derecho: ver detalle, autorizar, hacer ping, copiar IP, copiar MAC, abrir
+  en el navegador.
 - **Guardar**: graba el escaneo en el historial con una nota opcional.
 - **Exportar...**: genera un CSV (separado por `;`, se abre directo en Excel) o
   un JSON.
@@ -122,7 +164,7 @@ pasos.
 Con el entorno virtual activo:
 
 ```powershell
-pyinstaller --noconfirm --onefile --windowed --name EscanerRed escaner_red.py
+pyinstaller --noconfirm --onefile --windowed --name EscanerRed --add-data "fabricantes.txt;." escaner_red.py
 ```
 
 El resultado queda en `dist\EscanerRed.exe`. Es un único archivo que se puede
@@ -154,7 +196,8 @@ La base tiene dos tablas:
 | Tabla | Contenido |
 |---|---|
 | `escaneos` | Un registro por escaneo: `id`, `fecha`, `objetivo` (red o rango), `puertos` (lista pedida), `duracion` (segundos), `nota` |
-| `dispositivos` | Un registro por equipo encontrado: `escaneo_id`, `ip`, `nombre`, `mac`, `latencia` (ms, vacío si no respondió al ping), `ttl`, `puertos` (lista JSON de puertos abiertos) |
+| `dispositivos` | Un registro por equipo encontrado: `escaneo_id`, `ip`, `nombre`, `mac`, `latencia` (ms, vacío si no respondió al ping), `ttl`, `puertos` (lista JSON de puertos abiertos), `info` (JSON con el resto: fabricante, nombres por protocolo, grupo, sistema, web, servicios, UPnP) |
+| `autorizados` | Equipos marcados como autorizados: `clave` (MAC, o `ip:` + IP), `descripcion`, `fecha` |
 
 `escaneos.db` no se sube al repositorio porque contiene datos de la red
 (direcciones, nombres y MAC de los equipos).
@@ -163,7 +206,9 @@ La base tiene dos tablas:
 
 | Archivo | Descripción |
 |---|---|
-| `escaner_red.py` | Toda la aplicación |
+| `escaner_red.py` | La aplicación: interfaz, escaneo, base de datos |
+| `identificar.py` | Identificación de equipos: NetBIOS, mDNS, LLMNR, SMB, web, UPnP, fabricantes |
+| `fabricantes.txt` | Base de fabricantes del IEEE (prefijo de MAC y nombre) |
 | `EscanerRed.bat` | Acceso directo para abrirla sin consola |
 | `requirements.txt` | Librerías a instalar en el entorno virtual |
 | `README.md` | Esta documentación |
@@ -177,6 +222,9 @@ La base tiene dos tablas:
   eso no dependen del idioma del sistema ni abren procesos `ping.exe`.
   `puerto_abierto` prueba una conexión TCP y `resolver_nombre` hace la
   resolución inversa.
+- **Identificación**: el módulo `identificar.py` arma a mano los paquetes de
+  cada protocolo (NetBIOS, mDNS, LLMNR, SMB2 con NTLM, SSDP). Solo consulta
+  información que los equipos publican; no intenta iniciar sesión en ninguno.
 - **Detección de redes**: `detectar_redes` consulta las interfaces con el cmdlet
   `Get-NetIPAddress` de PowerShell.
 - **Entrada del usuario**: `interpretar_objetivo` e `interpretar_puertos`
@@ -194,8 +242,14 @@ resultados por una cola que la ventana lee cada 80 ms.
 - La MAC solo se obtiene de equipos de la misma red local; a través de un router
   o una VPN se ven la IP y los puertos, pero no la MAC.
 - Solo se prueban puertos TCP.
-- El sistema estimado puede fallar: se basa únicamente en el TTL.
-- No muestra el fabricante del dispositivo.
+- El tipo/sistema es una estimación. Cuando el equipo no publica nada, se basa
+  solo en el TTL del ping y puede fallar.
+- La versión de Windows sale de SMB: Windows 10 22H2 figura como compilación
+  19041 y los equipos que solo hablan SMB1 (Windows XP) no la informan.
+- El fabricante es el de la placa de red, que no siempre coincide con la marca
+  del equipo.
+- Los celulares y equipos con firewall estricto casi no publican datos: de ellos
+  suele verse solo la IP y una MAC privada.
 
 ## Uso responsable
 

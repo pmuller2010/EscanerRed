@@ -25,18 +25,26 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+import identificar as ident
+
 APP_TITULO = "Escáner de Red"
 MAX_HOSTS = 65536
-PUERTOS_DEFECTO = ("21,22,23,25,53,80,110,135,139,143,443,445,554,993,995,1433,1521,"
-                   "3306,3389,5432,5900,8000,8080,8443,9100")
+PUERTOS_DEFECTO = ("21,22,23,25,53,80,110,135,139,143,443,445,515,554,631,993,995,1433,"
+                   "1521,3306,3389,5432,5900,8000,8009,8080,8443,9100,62078")
 SERVICIOS = {
     21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP",
     110: "POP3", 135: "RPC", 139: "NetBIOS", 143: "IMAP", 443: "HTTPS",
     445: "SMB", 554: "RTSP", 993: "IMAPS", 995: "POP3S", 1433: "SQL Server",
     1521: "Oracle", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
     5900: "VNC", 8000: "HTTP-alt", 8080: "HTTP-proxy", 8443: "HTTPS-alt",
-    9100: "Impresora",
+    9100: "Impresora", 515: "Impresora LPD", 631: "Impresora IPP",
+    8009: "Chromecast", 62078: "iPhone/iPad",
 }
+PUERTOS_WEB = (80, 8080, 8000, 443, 8443)
+PUERTOS_BANNER = (21, 22, 25)
+SIN_AUTORIZAR = "SIN AUTORIZAR"
+AUTORIZADO = "Autorizado"
+ESTE_EQUIPO = "Este equipo"
 ERRORES_ICMP = {
     11002: "Red de destino inaccesible",
     11003: "Host de destino inaccesible",
@@ -262,6 +270,92 @@ def texto_puertos(puertos):
     return ", ".join(f"{p} ({SERVICIOS[p]})" if p in SERVICIOS else str(p) for p in puertos)
 
 
+def elegir_nombre(nombres):
+    """El mejor nombre entre los que contestó el equipo por cada protocolo."""
+    for origen in ("dns", "smb", "netbios", "mdns", "llmnr", "upnp"):   # netbios corta a 15 letras
+        if nombres.get(origen):
+            return nombres[origen]
+    return ""
+
+
+def clave_disp(d):
+    """Identificador estable del dispositivo: la MAC, o la IP si no se conoce."""
+    return d["mac"] or "ip:" + d["ip"]
+
+
+def tipo_dispositivo(d):
+    """Qué es el equipo, deducido de todo lo que se pudo averiguar (orientativo)."""
+    info = d.get("info") or {}
+    puertos = d["puertos"]
+    fab = info.get("fabricante", "")
+    upnp = info.get("upnp") or {}
+    nombres = " ".join((info.get("nombres") or {}).values()).lower()
+    if info.get("sistema"):
+        return info["sistema"]
+    if upnp.get("modelo"):
+        return " ".join(x for x in (upnp.get("fabricante", ""), upnp["modelo"]) if x)
+    if any(p in puertos for p in (9100, 515, 631)):
+        return "Impresora"
+    if 554 in puertos:
+        return "Cámara IP / DVR"
+    if 62078 in puertos or "iphone" in nombres or "ipad" in nombres:
+        return "iPhone / iPad"
+    if "android" in nombres:
+        return "Android"
+    titulo = next((w["titulo"] for w in (info.get("web") or {}).values() if w.get("titulo")), "")
+    if titulo and (23 in puertos or 53 in puertos) and 445 not in puertos:
+        return f"Router / equipo de red ({titulo})"
+    if 8009 in puertos:
+        return "Chromecast / Smart TV"
+    if fab.startswith("Apple"):
+        return "Apple"
+    if any(x in fab for x in ("Espressif", "Tuya", "Shelly", "Sonoff")):
+        return "Dispositivo IoT / domótica"
+    if ident.mac_privada(d["mac"]) and not puertos:
+        return "Celular / tablet (MAC privada)"
+    return sistema_estimado(d["ttl"])
+
+
+def texto_detalle(d, estado, descripcion):
+    info = d.get("info") or {}
+    lineas = []
+
+    def linea(titulo, valor):
+        if valor not in (None, "", [], {}):
+            lineas.append(f"{titulo + ':':<24}{valor}")
+
+    linea("Estado", estado + (f"  -  {descripcion}" if descripcion else ""))
+    linea("IP", d["ip"])
+    linea("Nombre", d["nombre"])
+    for origen, nombre in (info.get("nombres") or {}).items():
+        linea(f"   según {origen}", nombre)
+    linea("Grupo / dominio", info.get("grupo"))
+    linea("MAC", d["mac"])
+    linea("Fabricante", info.get("fabricante"))
+    if ident.mac_privada(d["mac"]):
+        lineas.append("   La MAC es privada/aleatoria: la inventa el propio equipo, como hacen")
+        lineas.append("   los celulares, tablets y notebooks con 'dirección Wi-Fi privada'.")
+        lineas.append("   No permite saber el fabricante y puede cambiar.")
+    linea("Tipo / sistema", tipo_dispositivo(d))
+    if d["latencia"] is None:
+        linea("Ping", "no responde")
+    else:
+        linea("Ping", f"{d['latencia']} ms, TTL {d['ttl']} ({sistema_estimado(d['ttl'])})")
+    linea("Puertos abiertos", texto_puertos(d["puertos"]) or "ninguno de los probados")
+    for puerto, web in (info.get("web") or {}).items():
+        linea(f"Web (puerto {puerto})", "  |  ".join(
+            f"{k}: {v}" for k, v in (("título", web.get("titulo")), ("servidor", web.get("servidor")),
+                                     ("pide clave para", web.get("auth"))) if v))
+    for puerto, texto in (info.get("banners") or {}).items():
+        linea(f"Servicio puerto {puerto}", texto)
+    upnp = info.get("upnp") or {}
+    for titulo, campo in (("UPnP nombre", "nombre"), ("UPnP fabricante", "fabricante"),
+                          ("UPnP modelo", "modelo"), ("UPnP nro. modelo", "modelo_nro"),
+                          ("UPnP descripción", "descripcion"), ("UPnP software", "servidor")):
+        linea(titulo, upnp.get(campo))
+    return "\n".join(lineas)
+
+
 # --------------------------------------------------------------------------
 # Base de datos
 # --------------------------------------------------------------------------
@@ -279,7 +373,12 @@ class BaseDatos:
                     escaneo_id INTEGER NOT NULL, ip TEXT, nombre TEXT, mac TEXT,
                     latencia INTEGER, ttl INTEGER, puertos TEXT);
                 CREATE INDEX IF NOT EXISTS ix_disp_escaneo ON dispositivos(escaneo_id);
+                CREATE TABLE IF NOT EXISTS autorizados(
+                    clave TEXT PRIMARY KEY, descripcion TEXT, fecha TEXT);
             """)
+            columnas = [f[1] for f in c.execute("PRAGMA table_info(dispositivos)")]
+            if "info" not in columnas:      # bases creadas con la primera versión
+                c.execute("ALTER TABLE dispositivos ADD COLUMN info TEXT")
 
     def _con(self):
         return sqlite3.connect(self.ruta)
@@ -293,10 +392,11 @@ class BaseDatos:
                     (meta["fecha"], meta["objetivo"], meta["puertos"], meta["duracion"], nota))
                 eid = cur.lastrowid
                 con.executemany(
-                    "INSERT INTO dispositivos(escaneo_id,ip,nombre,mac,latencia,ttl,puertos) "
-                    "VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO dispositivos(escaneo_id,ip,nombre,mac,latencia,ttl,puertos,info) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
                     [(eid, h["ip"], h["nombre"], h["mac"], h["latencia"], h["ttl"],
-                      json.dumps(h["puertos"])) for h in hosts])
+                      json.dumps(h["puertos"]),
+                      json.dumps(h.get("info") or {}, ensure_ascii=False)) for h in hosts])
             return eid
         finally:
             con.close()
@@ -315,12 +415,39 @@ class BaseDatos:
         con = self._con()
         try:
             filas = con.execute(
-                "SELECT ip,nombre,mac,latencia,ttl,puertos FROM dispositivos WHERE escaneo_id=?",
+                "SELECT ip,nombre,mac,latencia,ttl,puertos,info FROM dispositivos "
+                "WHERE escaneo_id=?",
                 (eid,)).fetchall()
         finally:
             con.close()
         return [{"ip": f[0], "nombre": f[1] or "", "mac": f[2] or "", "latencia": f[3],
-                 "ttl": f[4], "puertos": json.loads(f[5] or "[]"), "listo": True} for f in filas]
+                 "ttl": f[4], "puertos": json.loads(f[5] or "[]"),
+                 "info": json.loads(f[6] or "{}"), "listo": True} for f in filas]
+
+    def autorizados(self):
+        con = self._con()
+        try:
+            return dict(con.execute("SELECT clave, descripcion FROM autorizados").fetchall())
+        finally:
+            con.close()
+
+    def autorizar(self, claves, descripcion):
+        con = self._con()
+        try:
+            with con:
+                con.executemany(
+                    "INSERT OR REPLACE INTO autorizados(clave,descripcion,fecha) VALUES(?,?,?)",
+                    [(c, descripcion, datetime.now().strftime("%Y-%m-%d %H:%M:%S")) for c in claves])
+        finally:
+            con.close()
+
+    def desautorizar(self, clave):
+        con = self._con()
+        try:
+            with con:
+                con.execute("DELETE FROM autorizados WHERE clave=?", (clave,))
+        finally:
+            con.close()
 
     def eliminar(self, eid):
         con = self._con()
@@ -343,14 +470,15 @@ def clave_ip(ip):
 
 
 class App(tk.Tk):
-    COLUMNAS = (("ip", "IP", 120), ("nombre", "Nombre", 220), ("mac", "MAC", 140),
-                ("latencia", "Latencia", 110), ("sistema", "Sistema (estimado)", 150),
-                ("puertos", "Puertos abiertos", 420))
+    COLUMNAS = (("estado", "Estado", 105), ("ip", "IP", 105), ("nombre", "Nombre", 170),
+                ("mac", "MAC", 130), ("fabricante", "Fabricante", 190),
+                ("sistema", "Tipo / sistema (estimado)", 230), ("latencia", "Latencia", 95),
+                ("puertos", "Puertos abiertos", 300))
 
     def __init__(self):
         super().__init__()
         self.title(APP_TITULO)
-        self.geometry("1200x680")
+        self.geometry("1400x720")
         self.minsize(900, 500)
         self.db = BaseDatos(DB_PATH)
         self.q = queue.Queue()
@@ -362,7 +490,10 @@ class App(tk.Tk):
         self.meta = None          # datos del escaneo que se ve en pantalla
         self.guardado = True
         self.redes_locales = []
+        self.ips_propias = []
+        self.autorizados = self.db.autorizados()
         self.orden = ("ip", False)
+        ident.cargar_fabricantes(carpeta_app())
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=6)
@@ -413,7 +544,7 @@ class App(tk.Tk):
         ttk.Label(f, foreground="#666",
                   text="Formatos: 192.168.1.0/24  ·  192.168.1.1-50  ·  192.168.1.10   |   "
                        "Puertos: 22,80,443,8000-8100 (vacío = no escanear puertos)   |   "
-                       "Doble clic en un equipo = ping, clic derecho = más opciones"
+                       "Doble clic en un equipo = detalle, clic derecho = autorizar, ping y más"
                   ).pack(fill="x", padx=10)
 
         marco = ttk.Frame(f)
@@ -427,9 +558,16 @@ class App(tk.Tk):
         self.tabla.configure(yscrollcommand=sy.set)
         self.tabla.pack(side="left", fill="both", expand=True)
         sy.pack(side="right", fill="y")
-        self.tabla.bind("<Double-1>", lambda e: self.ping_seleccionado())
+        self.tabla.tag_configure("sin", background="#ffd9d9")
+        self.tabla.bind("<Double-1>", lambda e: self.ver_detalle())
         self.tabla.bind("<Button-3>", self._menu_contextual)
         self.menu = tk.Menu(self, tearoff=0)
+        self.menu.add_command(label="Ver detalle", command=self.ver_detalle)
+        self.menu.add_command(label="Marcar como autorizado...", command=self.autorizar)
+        self.menu.add_command(label="Quitar autorización", command=self.desautorizar)
+        self.menu.add_command(label="Autorizar todos los de la lista...",
+                              command=self.autorizar_todos)
+        self.menu.add_separator()
         self.menu.add_command(label="Hacer ping", command=self.ping_seleccionado)
         self.menu.add_command(label="Copiar IP", command=lambda: self._copiar("ip"))
         self.menu.add_command(label="Copiar MAC", command=lambda: self._copiar("mac"))
@@ -439,6 +577,8 @@ class App(tk.Tk):
         inf.pack(fill="x", padx=8, pady=(0, 8))
         self.barra = ttk.Progressbar(inf, length=260)
         self.barra.pack(side="right")
+        self.b_oui = ttk.Button(inf, text="Actualizar fabricantes", command=self.actualizar_oui)
+        self.b_oui.pack(side="right", padx=8)
         self.estado = ttk.Label(inf, text="Listo.")
         self.estado.pack(side="left")
 
@@ -453,13 +593,23 @@ class App(tk.Tk):
             puertos = texto_puertos(d["puertos"])
         else:
             puertos = "analizando..."
-        return (d["ip"], d["nombre"], d["mac"], lat, sistema_estimado(d["ttl"]), puertos)
+        return (self._estado(d), d["ip"], d["nombre"], d["mac"],
+                (d.get("info") or {}).get("fabricante", ""), tipo_dispositivo(d), lat, puertos)
+
+    def _estado(self, d):
+        if d["ip"] in self.ips_propias:
+            return ESTE_EQUIPO
+        return AUTORIZADO if clave_disp(d) in self.autorizados else SIN_AUTORIZAR
+
+    def _refrescar_fila(self, d):
+        self.tabla.item(d["ip"], values=self._valores_fila(d),
+                        tags=("sin",) if self._estado(d) == SIN_AUTORIZAR else ())
 
     def _poner_fila(self, d):
         ip = d["ip"]
         self.resultados[ip] = d
         if self.tabla.exists(ip):
-            self.tabla.item(ip, values=self._valores_fila(d))
+            self._refrescar_fila(d)
         else:
             # inserta ordenado por IP mientras llega
             pos = "end"
@@ -469,7 +619,8 @@ class App(tk.Tk):
                     if clave_ip(iid) > k:
                         pos = i
                         break
-            self.tabla.insert("", pos, iid=ip, values=self._valores_fila(d))
+            self.tabla.insert("", pos, iid=ip)
+            self._refrescar_fila(d)
 
     def ordenar(self, col):
         inverso = self.orden[0] == col and not self.orden[1]
@@ -481,11 +632,9 @@ class App(tk.Tk):
                 return clave_ip(ip)
             if col == "latencia":
                 return d["latencia"] if d["latencia"] is not None else 10 ** 9
-            if col == "sistema":
-                return sistema_estimado(d["ttl"])
             if col == "puertos":
                 return len(d["puertos"])
-            return (d[col] or "").lower()
+            return str(self.tabla.set(ip, col)).lower()
 
         for i, ip in enumerate(sorted(self.tabla.get_children(), key=clave, reverse=inverso)):
             self.tabla.move(ip, "", i)
@@ -540,15 +689,17 @@ class App(tk.Tk):
         hechos = 0
         with ThreadPoolExecutor(max_workers=min(128, len(ips))) as pool, \
                 ThreadPoolExecutor(max_workers=200) as pool_puertos:
-            futuros = [pool.submit(self._escanear_host, ip, puertos, espera, redes, pool_puertos)
-                       for ip in ips]
+            # búsqueda UPnP en paralelo; cada equipo espera su resultado al final
+            ssdp = pool_puertos.submit(ident.ssdp_descubrir, list(self.ips_propias))
+            futuros = [pool.submit(self._escanear_host, ip, puertos, espera, redes, pool_puertos,
+                                   ssdp) for ip in ips]
             for _ in as_completed(futuros):
                 hechos += 1
                 if hechos % 4 == 0 or hechos == len(ips):
                     self.q.put(("progreso", hechos, len(ips)))
         self.q.put(("fin", time.time() - t0, self.cancelar.is_set()))
 
-    def _escanear_host(self, ip, puertos, espera, redes, pool_puertos):
+    def _escanear_host(self, ip, puertos, espera, redes, pool_puertos, ssdp):
         if self.cancelar.is_set():
             return
         ok, ms, ttl, _ = icmp_ping(ip, espera)
@@ -558,26 +709,93 @@ class App(tk.Tk):
             mac = obtener_mac(ip)      # también detecta equipos que bloquean el ping
         if not ok and not mac:
             return
+        nombres = {}
+        info = {"fabricante": ident.fabricante(mac), "nombres": nombres}
         d = {"ip": ip, "nombre": "", "mac": mac, "latencia": ms if ok else None,
-             "ttl": ttl if ok else None, "puertos": [], "listo": False}
-        self.q.put(("host", dict(d)))
-        if self.cancelar.is_set():
-            return
-        d["nombre"] = resolver_nombre(ip)
-        self.q.put(("host", dict(d)))
+             "ttl": ttl if ok else None, "puertos": [], "info": info, "listo": False}
+
+        def avisar():
+            d["nombre"] = elegir_nombre(nombres)
+            self.q.put(("host", json.loads(json.dumps(d))))      # copia independiente
+
+        def seguir():
+            return not self.cancelar.is_set()
+
+        avisar()
+        seg = max(espera / 1000.0, 1.0)
+
+        # 1) Nombres: se le pregunta al propio equipo por varios protocolos
+        if seguir():
+            nb = ident.netbios(ip, seg)
+            if nb.get("nombre"):
+                nombres["netbios"] = nb["nombre"]
+            if nb.get("grupo"):
+                info["grupo"] = nb["grupo"]
+            if nb.get("mac") and not d["mac"]:
+                d["mac"] = nb["mac"]
+                info["fabricante"] = ident.fabricante(nb["mac"])
+        if seguir():
+            n = ident.nombre_mdns(ip, seg)
+            if n:
+                nombres["mdns"] = n
+        if seguir() and not nombres:
+            n = resolver_nombre(ip)
+            if n:
+                nombres["dns"] = n
+        if seguir() and not nombres:
+            n = ident.nombre_llmnr(ip, seg)
+            if n:
+                nombres["llmnr"] = n
+        avisar()
+
+        # 2) Puertos abiertos
         abiertos = []
         if puertos:
-            seg = espera / 1000.0
-
             def probar(p):
-                return p if (not self.cancelar.is_set() and puerto_abierto(ip, p, seg)) else None
+                return p if (seguir() and puerto_abierto(ip, p, espera / 1000.0)) else None
 
             for r in pool_puertos.map(probar, puertos):
                 if r:
                     abiertos.append(r)
         d["puertos"] = abiertos
+        if not d["mac"] and seguir() and (not redes or any(dir_ip in r for r in redes)):
+            d["mac"] = obtener_mac(ip)          # segundo intento: a veces el ARP tarda
+            info["fabricante"] = ident.fabricante(d["mac"])
+
+        # 3) Qué dicen los servicios que tiene abiertos
+        if 445 in abiertos and seguir():
+            smb = ident.smb_info(ip)
+            propio = smb.get("nombre_dns") or smb.get("nombre") or ""
+            if smb.get("sistema"):
+                info["sistema"] = smb["sistema"]
+            if propio:
+                nombres["smb"] = propio
+            dominio = smb.get("dominio_dns") or smb.get("dominio") or ""
+            if dominio and dominio.lower() != propio.lower():
+                info["grupo"] = dominio
+        for p in [p for p in PUERTOS_WEB if p in abiertos][:2]:
+            if seguir():
+                web = ident.http_info(ip, p)
+                if web:
+                    info.setdefault("web", {})[str(p)] = web
+        for p in PUERTOS_BANNER:
+            if p in abiertos and seguir():
+                texto = ident.banner(ip, p)
+                if texto:
+                    info.setdefault("banners", {})[str(p)] = texto
+        if seguir():
+            try:
+                encontrados = ssdp.result(timeout=10)
+            except Exception:
+                encontrados = {}
+            if ip in encontrados:
+                upnp = ident.upnp_info(ip, encontrados[ip])
+                if upnp:
+                    info["upnp"] = upnp
+                    if upnp.get("nombre"):
+                        nombres["upnp"] = upnp["nombre"]
         d["listo"] = True
-        self.q.put(("host", dict(d)))
+        avisar()
 
     def _fin_escaneo(self, duracion, cancelado):
         self.escaneando = False
@@ -586,7 +804,7 @@ class App(tk.Tk):
         for d in self.resultados.values():      # por si se detuvo a mitad de camino
             if not d.get("listo"):
                 d["listo"] = True
-                self.tabla.item(d["ip"], values=self._valores_fila(d))
+                self._refrescar_fila(d)
         if self.meta:
             self.meta["duracion"] = round(duracion, 1)
         self.guardado = not self.resultados
@@ -595,8 +813,12 @@ class App(tk.Tk):
                            font=("Segoe UI", 9, "bold"))
         self.bell()
         self.estado.config(text=f"{'■ Escaneo detenido' if cancelado else '✔ Escaneo terminado'}: "
-                                f"{len(self.resultados)} dispositivos en {duracion:.1f} s. "
+                                f"{len(self.resultados)} dispositivos en {duracion:.1f} s, "
+                                f"{self._cant_sin_autorizar()} sin autorizar. "
                                 f"{'' if self.guardado else 'Sin guardar.'}")
+
+    def _cant_sin_autorizar(self):
+        return sum(1 for d in self.resultados.values() if self._estado(d) == SIN_AUTORIZAR)
 
     def guardar_escaneo(self):
         if self.escaneando:
@@ -637,22 +859,32 @@ class App(tk.Tk):
         try:
             if ruta.lower().endswith(".json"):
                 datos = {"escaneo": self.meta, "dispositivos": [
-                    {"ip": h["ip"], "nombre": h["nombre"], "mac": h["mac"],
+                    {"estado": self._estado(h),
+                     "descripcion": self.autorizados.get(clave_disp(h), ""),
+                     "ip": h["ip"], "nombre": h["nombre"], "mac": h["mac"],
                      "latencia_ms": h["latencia"], "ttl": h["ttl"],
-                     "sistema_estimado": sistema_estimado(h["ttl"]),
-                     "puertos_abiertos": h["puertos"]} for h in hosts]}
+                     "tipo_estimado": tipo_dispositivo(h),
+                     "puertos_abiertos": h["puertos"], **(h.get("info") or {})}
+                    for h in hosts]}
                 with open(ruta, "w", encoding="utf-8") as fh:
                     json.dump(datos, fh, ensure_ascii=False, indent=2)
             else:
                 with open(ruta, "w", encoding="utf-8-sig", newline="") as fh:
                     w = csv.writer(fh, delimiter=";")
-                    w.writerow(["IP", "Nombre", "MAC", "Latencia (ms)", "TTL",
-                                "Sistema (estimado)", "Puertos abiertos"])
+                    w.writerow(["Estado", "Descripción", "IP", "Nombre", "MAC", "Fabricante",
+                                "Tipo / sistema (estimado)", "Grupo / dominio", "Latencia (ms)",
+                                "TTL", "Puertos abiertos", "Web", "Servicios", "UPnP"])
                     for h in hosts:
-                        w.writerow([h["ip"], h["nombre"], h["mac"],
+                        i = h.get("info") or {}
+                        web = " / ".join(f"{p}: {w_.get('titulo', '')} [{w_.get('servidor', '')}]"
+                                         for p, w_ in (i.get("web") or {}).items())
+                        serv = " / ".join(f"{p}: {t}" for p, t in (i.get("banners") or {}).items())
+                        upnp = " ".join(str(v) for v in (i.get("upnp") or {}).values())
+                        w.writerow([self._estado(h), self.autorizados.get(clave_disp(h), ""),
+                                    h["ip"], h["nombre"], h["mac"], i.get("fabricante", ""),
+                                    tipo_dispositivo(h), i.get("grupo", ""),
                                     "" if h["latencia"] is None else h["latencia"],
-                                    h["ttl"] or "", sistema_estimado(h["ttl"]),
-                                    texto_puertos(h["puertos"])])
+                                    h["ttl"] or "", texto_puertos(h["puertos"]), web, serv, upnp])
         except OSError as e:
             messagebox.showerror(APP_TITULO, f"No se pudo escribir el archivo:\n{e}")
             return
@@ -673,6 +905,68 @@ class App(tk.Tk):
         if d:
             self.clipboard_clear()
             self.clipboard_append(d[campo])
+
+    def ver_detalle(self):
+        d = self._seleccion()
+        if not d:
+            return
+        v = tk.Toplevel(self)
+        v.title(f"Detalle de {d['ip']}  {d['nombre']}")
+        v.geometry("860x480")
+        t = tk.Text(v, font=("Consolas", 10), wrap="word", padx=10, pady=10)
+        t.pack(fill="both", expand=True)
+        t.insert("1.0", texto_detalle(d, self._estado(d), self.autorizados.get(clave_disp(d), "")))
+        t.config(state="disabled")
+
+    def _refrescar_estados(self):
+        self.autorizados = self.db.autorizados()
+        for d in self.resultados.values():
+            self._refrescar_fila(d)
+
+    def autorizar(self):
+        d = self._seleccion()
+        if not d:
+            return
+        desc = simpledialog.askstring(
+            APP_TITULO, f"Descripción del equipo {d['ip']} (ej.: Notebook de Juan, Impresora "
+                        "de recepción):", parent=self,
+            initialvalue=self.autorizados.get(clave_disp(d), "") or d["nombre"])
+        if desc is None:
+            return
+        self.db.autorizar([clave_disp(d)], desc.strip())
+        self._refrescar_estados()
+
+    def desautorizar(self):
+        d = self._seleccion()
+        if d:
+            self.db.desautorizar(clave_disp(d))
+            self._refrescar_estados()
+
+    def autorizar_todos(self):
+        pendientes = [d for d in self.resultados.values() if self._estado(d) == SIN_AUTORIZAR]
+        if not pendientes:
+            messagebox.showinfo(APP_TITULO, "No hay equipos sin autorizar en la lista.")
+            return
+        if not messagebox.askyesno(
+                APP_TITULO, f"Se van a marcar como autorizados los {len(pendientes)} equipos que "
+                            "figuran SIN AUTORIZAR.\n\nHacelo solo si ya revisaste que todos "
+                            "pertenecen a la empresa.\n\n¿Continuar?"):
+            return
+        self.db.autorizar([clave_disp(d) for d in pendientes], "")
+        self._refrescar_estados()
+
+    def actualizar_oui(self):
+        self.b_oui.config(state="disabled")
+        self.estado.config(text="Descargando la base de fabricantes del IEEE...",
+                           foreground="", font=("Segoe UI", 9))
+
+        def tarea():
+            try:
+                self.q.put(("oui", ident.descargar_fabricantes(carpeta_app()), ""))
+            except Exception as e:
+                self.q.put(("oui", 0, str(e)))
+
+        threading.Thread(target=tarea, daemon=True).start()
 
     def abrir_navegador(self):
         d = self._seleccion()
@@ -866,6 +1160,8 @@ class App(tk.Tk):
         self._limpiar_tabla()
         self.meta = dict(self.historial[sel[0]])
         for h in sorted(self.db.hosts(int(sel[0])), key=lambda h: clave_ip(h["ip"])):
+            if not h["info"].get("fabricante"):      # escaneos de la primera versión
+                h["info"]["fabricante"] = ident.fabricante(h["mac"])
             self._poner_fila(h)
         self.guardado = True
         self.estado.config(foreground="", font=("Segoe UI", 9))
@@ -895,7 +1191,8 @@ class App(tk.Tk):
         b = {h["ip"]: h for h in self.db.hosts(int(nuevo))}
 
         def desc(h):
-            partes = [h["ip"].ljust(16), (h["nombre"] or "-").ljust(30), h["mac"] or "-"]
+            partes = [h["ip"].ljust(16), (h["nombre"] or "-").ljust(26), (h["mac"] or "-").ljust(18),
+                      (h.get("info") or {}).get("fabricante", ""), "·", tipo_dispositivo(h)]
             return "  ".join(partes)
 
         lineas = [f"ANTERIOR: {self.historial[viejo]['fecha']}  ({self.historial[viejo]['objetivo']})"
@@ -959,6 +1256,16 @@ class App(tk.Tk):
                     self._fin_escaneo(m[1], m[2])
                 elif tipo == "redes":
                     self._redes_detectadas(m[1])
+                elif tipo == "oui":
+                    self.b_oui.config(state="normal")
+                    if m[2]:
+                        self.estado.config(text=f"No se pudo actualizar la base de fabricantes: {m[2]}")
+                    else:
+                        for d in self.resultados.values():
+                            if d["mac"]:
+                                d.setdefault("info", {})["fabricante"] = ident.fabricante(d["mac"])
+                            self._refrescar_fila(d)
+                        self.estado.config(text=f"Base de fabricantes actualizada: {m[1]} entradas.")
                 elif tipo == "ping":
                     self._linea_ping(m[1], m[2])
                 elif tipo == "ping_estado":
@@ -973,6 +1280,7 @@ class App(tk.Tk):
 
     def _redes_detectadas(self, redes):
         self.redes_locales = [r[0] for r in redes]
+        self.ips_propias = [r[1] for r in redes]
         opciones = []
         for red, ip, alias in redes:
             if red.prefixlen < 22:      # red enorme: se propone solo el /24 propio
