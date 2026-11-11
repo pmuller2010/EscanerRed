@@ -478,8 +478,8 @@ def clave_ip(ip):
 
 
 class App(tk.Tk):
-    COLUMNAS = (("estado", "Estado", 105), ("descripcion", "Descripción", 180),
-                ("ip", "IP", 105), ("nombre", "Nombre", 160), ("mac", "MAC", 130),
+    COLUMNAS = (("estado", "Estado", 105), ("nombre", "Nombre", 160),
+                ("ip", "IP", 105), ("descripcion", "Descripción", 180), ("mac", "MAC", 130),
                 ("fabricante", "Fabricante", 180), ("sistema", "Tipo / sistema (estimado)", 220),
                 ("latencia", "Latencia", 90), ("puertos", "Puertos abiertos", 260))
 
@@ -605,7 +605,7 @@ class App(tk.Tk):
             puertos = texto_puertos(d["puertos"])
         else:
             puertos = "analizando..."
-        return (self._estado(d), self.autorizados.get(clave_disp(d), ""), d["ip"], d["nombre"],
+        return (self._estado(d), d["nombre"], d["ip"], self.autorizados.get(clave_disp(d), ""),
                 d["mac"],
                 (d.get("info") or {}).get("fabricante", ""), tipo_dispositivo(d), lat, puertos)
 
